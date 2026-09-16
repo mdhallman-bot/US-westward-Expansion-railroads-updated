@@ -127,6 +127,19 @@
   #print-summary h2 { border-bottom: 1px solid #999; margin-top: 1.4em; }
   #print-summary .p-block { white-space: pre-wrap; margin: 6px 0 14px 0; }
   #print-summary .p-label { font-family: Arial, sans-serif; font-weight: bold; font-size: 0.85rem; color: var(--accent); margin-top: 10px; }
+
+  .review-panel { display:none; background: var(--panel); border: 2px solid var(--accent); border-radius: 8px; padding: 18px 20px; margin: 14px 0; }
+  .review-percent { font-family: Arial, sans-serif; font-size: 2.2rem; font-weight: bold; color: var(--accent); }
+  .review-sub { font-family: Arial, sans-serif; font-size: 0.9rem; color: #666; margin-bottom: 10px; }
+  .review-list { list-style:none; padding:0; margin:0; font-family: Arial, sans-serif; font-size: 0.92rem; }
+  .review-list li { padding: 3px 0; }
+  .review-list li.done { color: var(--green-strong); }
+  .review-list li.missing { color: #999; }
+
+  .failsafe-wrap { margin-top: 110px; padding: 20px 0 10px 0; border-top: 1px dashed #ccc; text-align:center; }
+  .failsafe-label { font-family: Arial, sans-serif; font-size:0.78rem; color:#999; max-width: 500px; margin: 0 auto 8px auto; }
+  .failsafe-btn { background:#eee; color:#888; border:1px dashed #bbb; font-size:12px; padding:8px 14px; }
+  .failsafe-btn:hover { background:#ddd; color:#555; }
 </style>
 </head>
 <body>
@@ -401,15 +414,23 @@ actually mean as they come up today.</div>
 
 <div class="corrections-note" style="margin-bottom:6px;">
   <strong>Save my work:</strong> stores your progress so you can pick up where you left off, even on a different
-  day or a different device. <strong>Download / Print:</strong> makes a printable copy of everything you've done
-  — use this once you're finished, or whenever your teacher asks for a paper copy. You'll need to save your work
-  (or get AI feedback above) at least once before Download unlocks.
+  day or device. <strong>Submit for Review:</strong> checks how much you've finished and shows you what's left.
+  <strong>Save as PDF:</strong> makes a printable copy of everything you've done, unlocked once you submit for
+  review.
 </div>
 <button class="primary" onclick="saveWork()">Save my work</button>
-<button id="download-btn" onclick="downloadWork()" disabled>Download / Print my work</button>
+<button class="primary" onclick="submitForReview()">Submit for Review</button>
+<button id="download-btn" onclick="downloadWork()" disabled>Save as PDF</button>
 <span id="save-status" class="save-indicator"></span>
 
+<div class="review-panel" id="review-panel"></div>
+
 <div id="print-summary"></div>
+
+<div class="failsafe-wrap">
+  <div class="failsafe-label">Technical problems? If Submit for Review or Save as PDF won't work, use this instead &mdash; it skips the review step and saves a PDF of your work as-is.</div>
+  <button class="failsafe-btn" onclick="failsafeDownload()">Technical Problems &mdash; Save as PDF Anyway</button>
+</div>
 
 </div><!-- /#rest-of-lesson -->
 
@@ -796,6 +817,53 @@ function unlockDownload() {
   if (btn) btn.disabled = false;
 }
 
+// ---------- Completion checklist ----------
+function getCompletionChecklist() {
+  return [
+    { label: 'Prediction written', done: document.getElementById('predict-write').value.trim().length > 0 },
+    { label: 'Economics sort complete (8 of 8)', done: Object.keys(econPlacements).length === 8 },
+    { label: 'Economics discussion written', done: document.getElementById('econ-discuss').value.trim().length > 0 },
+    { label: 'Freight direction sort complete (8 of 8)', done: Object.keys(freightPlacements).length === 8 },
+    { label: 'Freight discussion written', done: document.getElementById('freight-discuss').value.trim().length > 0 },
+    { label: 'Buffalo ranking complete (4 of 4)', done: Object.keys(buffaloPlacements).length === 4 },
+    { label: 'Buffalo #1 rationale written', done: document.getElementById('buffalo-rationale-1').value.trim().length > 0 },
+    { label: 'Cattle trail ranking complete (4 of 4)', done: Object.keys(trailPlacements).length === 4 },
+    { label: 'Cattle trail #1 rationale written', done: document.getElementById('trail-rationale-1').value.trim().length > 0 },
+    { label: 'Cowboy-demand question written', done: document.getElementById('cowboy-demand-write').value.trim().length > 0 },
+    { label: 'Closing synthesis written', done: document.getElementById('synthesis-write').value.trim().length >= 40 }
+  ];
+}
+
+function calculateCompletion() {
+  const items = getCompletionChecklist();
+  const doneCount = items.filter(i => i.done).length;
+  const percent = Math.round((doneCount / items.length) * 100);
+  return { items: items, doneCount: doneCount, total: items.length, percent: percent };
+}
+
+function buildReviewHtml(comp) {
+  let html = '<div class="review-percent">' + comp.percent + '% Complete</div>';
+  html += '<div class="review-sub">' + comp.doneCount + ' of ' + comp.total + ' tasks finished</div>';
+  html += '<ul class="review-list">';
+  comp.items.forEach(i => {
+    html += '<li class="' + (i.done ? 'done' : 'missing') + '">' + (i.done ? '\u2713 ' : '\u25cb ') + i.label + '</li>';
+  });
+  html += '</ul>';
+  return html;
+}
+
+async function submitForReview() {
+  const studentId = document.getElementById('student-id').value.trim();
+  if (!studentId) { alert('Enter your name first.'); return; }
+  await callBackend('save_state', collectState());
+  unlockDownload();
+  const comp = calculateCompletion();
+  const panel = document.getElementById('review-panel');
+  panel.style.display = 'block';
+  panel.innerHTML = buildReviewHtml(comp);
+  panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 async function checkSynthesis() {
   if (synthesisAttempts >= MAX_CHECK_ATTEMPTS) return;
   synthesisAttempts++;
@@ -922,11 +990,49 @@ async function loadState() {
   status.textContent = 'Work loaded.';
 }
 
+function binSummaryHtml(placements, labels, binNames) {
+  let html = '';
+  Object.keys(binNames).forEach(binKey => {
+    const items = Object.keys(placements).filter(k => placements[k] === binKey).map(k => labels[k]);
+    html += '<div class="p-label">' + binNames[binKey] + '</div><div class="p-block">' + (items.length ? items.join(', ') : '(none placed)') + '</div>';
+  });
+  const placedCount = Object.keys(placements).length;
+  const totalCount = Object.keys(labels).length;
+  if (placedCount < totalCount) {
+    html += '<div class="p-block" style="font-style:italic;color:#a33;">' + (totalCount - placedCount) + ' item(s) not yet placed.</div>';
+  }
+  return html;
+}
+
+function vocabSummaryHtml() {
+  const all = VOCAB_TIER2.concat(VOCAB_TIER3);
+  const recognized = all.filter(v => recognizedVocab[v.key]).map(v => v.label);
+  return recognized.length ? recognized.join(', ') : '(none marked)';
+}
+
 function downloadWork() {
-  if (!hasSavedOrSubmitted) { alert('Please save your work (or submit for AI feedback) at least once before downloading.'); return; }
+  if (!hasSavedOrSubmitted) { alert('Please click Submit for Review at least once before saving as PDF, or use the Technical Problems button at the bottom of the page if that does not work.'); return; }
+  generateAndPrint();
+}
+
+function failsafeDownload() {
+  generateAndPrint();
+}
+
+function generateAndPrint() {
   const studentId = document.getElementById('student-id').value.trim() || '(no name entered)';
   const now = new Date().toLocaleString();
   const esc = s => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const comp = calculateCompletion();
+
+  let reviewHtml = '<div style="border:2px solid #333; padding:14px 18px; margin-bottom:22px;">';
+  reviewHtml += '<div style="font-family:Arial, sans-serif; font-size:26px; font-weight:bold;">' + comp.percent + '% Complete</div>';
+  reviewHtml += '<div style="font-family:Arial, sans-serif; font-size:13px; color:#555; margin-bottom:8px;">' + comp.doneCount + ' of ' + comp.total + ' tasks finished</div>';
+  reviewHtml += '<ul style="margin:0; padding-left:18px; font-family:Arial, sans-serif; font-size:13px;">';
+  comp.items.forEach(i => {
+    reviewHtml += '<li style="color:' + (i.done ? '#2a2a2a' : '#a33') + ';">' + (i.done ? '\u2713 ' : '\u2717 ') + i.label + '</li>';
+  });
+  reviewHtml += '</ul></div>';
 
   let buffaloHtml = '';
   [1,2,3,4].forEach(r => {
@@ -943,9 +1049,18 @@ function downloadWork() {
     <h1>Day 2: Railroads, Cattle, and the Economy of the Plains \u2014 ${esc(studentId)}</h1>
     <div class="p-label">Printed: ${now}</div>
 
+    ${reviewHtml}
+
+    <h2>Warm-Up: Vocabulary Recognized</h2>
+    <div class="p-block">${vocabSummaryHtml()}</div>
+
     <h2>Document 1: Economics</h2>
     <div class="p-label">Prediction</div><div class="p-block">${esc(document.getElementById('predict-write').value) || '(not written)'}</div>
+    <div class="p-label">Economics sort \u2014 Grew, 1840&ndash;1910</div>
+    ${binSummaryHtml(econPlacements, ECON_LABELS, {grew:'Grew, 1840\u20131910', shrank:'Shrank, 1840\u20131910'})}
     <div class="p-label">Why the two outliers moved differently</div><div class="p-block">${esc(document.getElementById('econ-discuss').value) || '(not written)'}</div>
+    <div class="p-label">Freight direction sort</div>
+    ${binSummaryHtml(freightPlacements, FREIGHT_LABELS, {east:'Headed EAST', west:'Headed WEST'})}
     <div class="p-label">What went which way, and why</div><div class="p-block">${esc(document.getElementById('freight-discuss').value) || '(not written)'}</div>
 
     <h2>Document 2: The Buffalo \u2014 Ranking</h2>
@@ -967,7 +1082,19 @@ function downloadWork() {
 }
 window.addEventListener('afterprint', () => { document.body.classList.remove('printing'); });
 
+// ---------- Shuffle a card pool's display order (Fisher-Yates), so answer patterns aren't telegraphed by list position ----------
+function shuffleChildren(containerId) {
+  const container = document.getElementById(containerId);
+  const nodes = Array.from(container.children);
+  for (let i = nodes.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [nodes[i], nodes[j]] = [nodes[j], nodes[i]];
+  }
+  nodes.forEach(node => container.appendChild(node)); // re-appending existing nodes moves them, listeners stay intact
+}
+
 // ---------- Init ----------
+shuffleChildren('freight-pool');
 renderVocab();
 renderEconBins();
 renderFreightBins();
